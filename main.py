@@ -27,7 +27,7 @@ from kivy.uix.boxlayout import BoxLayout
 from kivy.uix.floatlayout import FloatLayout
 from kivy.uix.scrollview import ScrollView
 from kivy.uix.gridlayout import GridLayout
-from kivy.uix.screenmanager import ScreenManager, Screen, FadeTransition
+from kivy.uix.screenmanager import ScreenManager, Screen, NoTransition
 from kivy.graphics import Color, Rectangle, Ellipse
 from kivy.clock import Clock
 from kivy.core.window import Window
@@ -638,29 +638,41 @@ class ShopScreen(Screen):
 # ======================================================================
 
 class DodgeScreenManager(ScreenManager):
+    _game_counter = 0
+    _current_game_name = None
+
     def app_go_menu(self):
         self._cleanup_game()
-        self.transition = FadeTransition(duration=0.2)
+        self.transition = NoTransition()
         self.current = "menu"
 
     def app_go_shop(self):
-        self.transition = FadeTransition(duration=0.2)
+        self.transition = NoTransition()
         self.current = "shop"
 
     def app_go_game(self):
         self._cleanup_game()
-        self.add_widget(GameScreen(name="game"))
-        self.transition = FadeTransition(duration=0.2)
-        self.current = "game"
+        # У каждого нового игрового экрана — уникальное имя.
+        # Если каждый раз называть его одинаково ("game"), Kivy на некоторых
+        # устройствах "не замечает", что экран нужно обновить, и остаётся
+        # видно предыдущий экран (баг с зависшими кнопками меню).
+        self._game_counter += 1
+        name = f"game_{self._game_counter}"
+        self._current_game_name = name
+        self.add_widget(GameScreen(name=name))
+        self.transition = NoTransition()
+        self.current = name
 
     def app_restart_game(self):
         self.app_go_game()
 
     def _cleanup_game(self):
-        old = self.get_screen("game") if self.has_screen("game") else None
-        if old:
+        name = self._current_game_name
+        if name and self.has_screen(name):
+            old = self.get_screen(name)
             old.stop_game()
             self.remove_widget(old)
+        self._current_game_name = None
 
 
 class DodgeApp(App):
