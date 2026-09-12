@@ -1,5 +1,6 @@
 [app]
 title = Dodge Game
+android.accept_sdk_license = True
 package.name = dodgegame
 package.domain = org.myapp
 
