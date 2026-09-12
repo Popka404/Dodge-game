@@ -312,7 +312,7 @@ class GameScreen(Screen):
         if "slow_start" in self.save.get("owned_upgrades", []):
             self.invulnerable_timer = 1.5  # уже учтено ниже мягким стартом скорости
 
-        self.touch_x = None
+        self._dragging = False
         self.started = True
 
         self._bg_color_instr = None
@@ -321,14 +321,36 @@ class GameScreen(Screen):
         Clock.schedule_interval(self.update, 1 / 60)
 
     def on_touch_down(self, touch):
-        if self.started and not self.game_over:
-            self.touch_x = touch.x
+        if self.started and not self.game_over and self.player.collide_point(*touch.pos):
+            # Начинаем "тащить" игрока только если палец коснулся именно его
+            touch.grab(self)
+            self._dragging = True
+            self._move_player_to(touch.x, touch.y)
+            return True
         return super().on_touch_down(touch)
 
     def on_touch_move(self, touch):
-        if self.started and not self.game_over:
-            self.touch_x = touch.x
+        if touch.grab_current is self and self._dragging:
+            self._move_player_to(touch.x, touch.y)
+            return True
         return super().on_touch_move(touch)
+
+    def on_touch_up(self, touch):
+        if touch.grab_current is self:
+            touch.ungrab(self)
+            self._dragging = False
+            return True
+        return super().on_touch_up(touch)
+
+    def _move_player_to(self, x, y):
+        """Игрок следует ровно за пальцем в любую точку экрана,
+        не выходя за границы экрана."""
+        width = self.width or Window.width
+        height = self.height or Window.height
+        new_x = max(0, min(width - self.player.width, x - self.player.width / 2))
+        new_y = max(0, min(height - self.player.height, y - self.player.height / 2))
+        self.player.pos = (new_x, new_y)
+        self.player.update_graphics()
 
     # ------------------------------------------------------------
     def spawn_object(self):
@@ -380,13 +402,6 @@ class GameScreen(Screen):
 
         width = self.width or Window.width
 
-        # --- Движение игрока к точке касания ---
-        if self.touch_x is not None:
-            target = self.touch_x - self.player.width / 2
-            self.player.x += (target - self.player.x) * 0.25
-            self.player.x = max(0, min(width - self.player.width, self.player.x))
-            self.player.update_graphics()
-
         has_magnet = "magnet" in self.save.get("owned_upgrades", [])
 
         for obj in self.objects[:]:
@@ -403,6 +418,12 @@ class GameScreen(Screen):
             if obj.top < 0:
                 self.objects.remove(obj)
                 self.root_layout.remove_widget(obj)
+                # Очко за каждый успешно пройденный (не задевший игрока)
+                # опасный блок. Засчитывается ровно один раз — блок уже
+                # удалён из игры и больше не может быть пройден повторно.
+                if obj.kind == "danger":
+                    self.score += 1
+                    self.score_label.text = f"Очки: {self.score}"
                 continue
 
             if obj.collides_with(self.player):
