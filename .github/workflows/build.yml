@@ -10,9 +10,14 @@ jobs:
           python-version: '3.10'
       - name: Install buildozer
         run: |
-          pip install buildozer==1.5.0 cython==3.0.10 python-for-android==2024.1.21
+          pip install buildozer cython==0.29.33
           sudo apt update
           sudo apt install -y git zip unzip openjdk-17-jdk autoconf libtool pkg-config zlib1g-dev libncurses5-dev libncursesw5-dev libtinfo5 cmake libffi-dev libssl-dev
+      - name: Set Java 17
+        run: |
+          sudo update-alternatives --set java /usr/lib/jvm/temurin-17-jdk-amd64/bin/java
+          sudo update-alternatives --set javac /usr/lib/jvm/temurin-17-jdk-amd64/bin/javac
+          echo "JAVA_HOME=/usr/lib/jvm/temurin-17-jdk-amd64" >> $GITHUB_ENV
       - name: Build APK
         run: buildozer -v android debug
       - uses: actions/upload-artifact@v4
