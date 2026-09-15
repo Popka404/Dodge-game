@@ -3,6 +3,7 @@ title = Игра в догонялки
 android.accept_sdk_license = True
 package.name = dodgegame
 package.domain = org.myapp
+icon.filename = %(source.dir)s/icon.png
 
 source.dir = .
 source.include_exts = py,png,jpg,kv,atlas,wav

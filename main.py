@@ -28,7 +28,8 @@ from kivy.uix.floatlayout import FloatLayout
 from kivy.uix.scrollview import ScrollView
 from kivy.uix.gridlayout import GridLayout
 from kivy.uix.screenmanager import ScreenManager, Screen, NoTransition
-from kivy.graphics import Color, Rectangle, Ellipse
+from kivy.uix.image import Image as KivyImage
+from kivy.graphics import Color, Rectangle, Ellipse, Triangle, Quad, Line
 from kivy.clock import Clock
 from kivy.core.window import Window
 from kivy.core.audio import SoundLoader
@@ -88,11 +89,19 @@ def write_save(data):
 # ======================================================================
 
 SKINS = [
-    {"id": "green",  "name": "Зелёный",     "color": (0.20, 0.80, 0.30, 1), "price": 0},
-    {"id": "blue",   "name": "Синий",       "color": (0.20, 0.50, 0.90, 1), "price": 30},
-    {"id": "purple", "name": "Фиолетовый",  "color": (0.60, 0.30, 0.90, 1), "price": 60},
-    {"id": "fire",   "name": "Огненный",    "color": (0.90, 0.30, 0.10, 1), "price": 90},
-    {"id": "gold",   "name": "Золотой",     "color": (0.95, 0.80, 0.20, 1), "price": 120},
+    {"id": "green",  "name": "Зелёный",     "color": (0.20, 0.80, 0.30, 1), "shape": "rect", "price": 0},
+    {"id": "blue",   "name": "Синий",       "color": (0.20, 0.50, 0.90, 1), "shape": "rect", "price": 30},
+    {"id": "purple", "name": "Фиолетовый",  "color": (0.60, 0.30, 0.90, 1), "shape": "rect", "price": 60},
+    {"id": "fire",   "name": "Огненный",    "color": (0.90, 0.30, 0.10, 1), "shape": "rect", "price": 90},
+    {"id": "gold",   "name": "Золотой",     "color": (0.95, 0.80, 0.20, 1), "shape": "rect", "price": 120},
+    # Другие формы
+    {"id": "circle_cyan",  "name": "Голубой круг",    "color": (0.25, 0.85, 0.85, 1), "shape": "circle", "price": 70},
+    {"id": "tri_orange",   "name": "Оранжевый треугольник", "color": (0.95, 0.55, 0.15, 1), "shape": "triangle", "price": 70},
+    {"id": "diamond_pink", "name": "Розовый ромб",    "color": (0.90, 0.35, 0.65, 1), "shape": "diamond", "price": 85},
+    # Фото-скины друзей (картинка, обрезанная в квадрат)
+    {"id": "stul",    "name": "Стульчик",  "image": "skin_stul.png",     "shape": "image", "price": 100},
+    {"id": "georgiy", "name": "Георгий",   "image": "skin_georgiy.png",  "shape": "image", "price": 100},
+    {"id": "rostik",  "name": "Ростик",    "image": "skin_rostik.png",   "shape": "image", "price": 100},
 ]
 
 UPGRADES = [
@@ -116,6 +125,8 @@ UPGRADES = [
     },
 ]
 
+REVIVE_COST = 50  # монет за возрождение после смерти
+
 # Фоновые цвета — экран темнеет/меняет оттенок с ростом счёта
 BG_LEVELS = [
     (0.05, 0.05, 0.08, 1),
@@ -127,11 +138,15 @@ BG_LEVELS = [
 ]
 
 
-def get_skin_color(skin_id):
+def get_skin(skin_id):
     for s in SKINS:
         if s["id"] == skin_id:
-            return s["color"]
-    return SKINS[0]["color"]
+            return s
+    return SKINS[0]
+
+
+def asset_path(filename):
+    return os.path.join(os.path.dirname(__file__), filename)
 
 
 # Звуки грузим один раз и переиспользуем
@@ -141,7 +156,7 @@ _SOUNDS = {}
 def play_sound(name):
     snd = _SOUNDS.get(name)
     if snd is None:
-        path = os.path.join(os.path.dirname(__file__), f"{name}.wav")
+        path = asset_path(f"{name}.wav")
         if os.path.exists(path):
             snd = SoundLoader.load(path)
             _SOUNDS[name] = snd
@@ -163,27 +178,80 @@ def vibrate(seconds):
 # ======================================================================
 
 class Player(Widget):
-    def __init__(self, color, **kwargs):
+    def __init__(self, skin, **kwargs):
         super().__init__(**kwargs)
         # Без этого FloatLayout растягивает виджет на весь экран по умолчанию
         self.size_hint = (None, None)
         self.size = (80, 80)
+        self.image_widget = None
         with self.canvas:
-            self.color_instr = Color(*color)
-            self.rect = Rectangle(pos=self.pos, size=self.size)
             # Кольцо щита (видно только когда активен щит)
             self.shield_color = Color(0.3, 0.8, 1, 0)
             self.shield_ring = Ellipse(pos=self.pos, size=self.size)
+        self.apply_skin(skin)
 
-    def set_color(self, color):
-        self.color_instr.rgba = color
+    def apply_skin(self, skin):
+        """Перерисовывает игрока под новый скин (цвет/форма или фото)."""
+        self.canvas.before.clear()
+        if self.image_widget:
+            self.remove_widget(self.image_widget)
+            self.image_widget = None
+
+        shape = skin.get("shape", "rect")
+        with self.canvas.before:
+            self.color_instr = Color(*skin.get("color", (1, 1, 1, 1)))
+            if shape == "circle":
+                self.shape_instr = Ellipse(pos=self.pos, size=self.size)
+            elif shape == "triangle":
+                self.shape_instr = Triangle(points=self._triangle_points())
+            elif shape == "diamond":
+                self.shape_instr = Quad(points=self._diamond_points())
+            else:
+                self.shape_instr = Rectangle(pos=self.pos, size=self.size)
+
+        self.shape = shape
+        if shape == "image":
+            self.image_widget = KivyImage(
+                source=asset_path(skin["image"]),
+                size=self.size, pos=self.pos,
+                allow_stretch=True, keep_ratio=False,
+            )
+            self.add_widget(self.image_widget)
+
+        self.update_graphics()
+
+    def _triangle_points(self):
+        x, y = self.pos
+        w, h = self.size
+        return [x, y, x + w / 2, y + h, x + w, y]
+
+    def _diamond_points(self):
+        x, y = self.pos
+        w, h = self.size
+        cx, cy = x + w / 2, y + h / 2
+        return [cx, y, x + w, cy, cx, y + h, x, cy]
 
     def set_shield_visible(self, visible):
         self.shield_color.a = 0.35 if visible else 0
 
     def update_graphics(self):
-        self.rect.pos = self.pos
-        self.rect.size = self.size
+        pos, size = self.pos, self.size
+        shape = getattr(self, "shape", "rect")
+        if shape == "circle":
+            self.shape_instr.pos = pos
+            self.shape_instr.size = size
+        elif shape == "triangle":
+            self.shape_instr.points = self._triangle_points()
+        elif shape == "diamond":
+            self.shape_instr.points = self._diamond_points()
+        elif shape == "rect":
+            self.shape_instr.pos = pos
+            self.shape_instr.size = size
+
+        if self.image_widget:
+            self.image_widget.pos = pos
+            self.image_widget.size = size
+
         pad = -8
         self.shield_ring.pos = (self.x + pad, self.y + pad)
         self.shield_ring.size = (self.width - pad * 2, self.height - pad * 2)
@@ -194,14 +262,27 @@ class Player(Widget):
 # ======================================================================
 
 # kind: "danger" (опасность), "gold" (бонус-очки), "coin" (валюта),
-#       "shield" (бонус: неуязвимость), "slow" (бонус: замедление времени)
+#       "shield" (бонус: неуязвимость), "slow" (бонус: замедление времени),
+#       "swerve" (резко меняет траекторию, с 50 очков),
+#       "shooter" (стреляет вниз, с 100 очков), "projectile" (его снаряд)
 KIND_STYLE = {
-    "danger": {"color": (0.9, 0.2, 0.2, 1), "shape": "rect", "size": (60, 60)},
-    "gold":   {"color": (0.95, 0.85, 0.2, 1), "shape": "rect", "size": (55, 55)},
-    "coin":   {"color": (1.0, 0.6, 0.1, 1), "shape": "circle", "size": (34, 34)},
-    "shield": {"color": (0.3, 0.75, 1.0, 1), "shape": "circle", "size": (46, 46)},
-    "slow":   {"color": (0.65, 0.35, 0.95, 1), "shape": "circle", "size": (46, 46)},
+    "danger":     {"color": (0.9, 0.2, 0.2, 1),   "shape": "rect",   "size": (60, 60)},
+    "gold":       {"color": (0.95, 0.85, 0.2, 1), "shape": "rect",   "size": (55, 55)},
+    "coin":       {"color": (1.0, 0.6, 0.1, 1),   "shape": "circle", "size": (34, 34)},
+    "shield":     {"color": (0.3, 0.75, 1.0, 1),  "shape": "circle", "size": (46, 46)},
+    "slow":       {"color": (0.65, 0.35, 0.95, 1),"shape": "circle", "size": (46, 46)},
+    "swerve":     {"color": (0.85, 0.35, 0.65, 1),"shape": "rect",   "size": (55, 55)},
+    "shooter":    {"color": (0.55, 0.08, 0.08, 1),"shape": "rect",   "size": (65, 65)},
+    "projectile": {"color": (1.0, 0.55, 0.05, 1), "shape": "rect",   "size": (16, 36)},
 }
+
+# Типы, которые "убивают" при касании (как обычный опасный блок)
+HAZARD_KINDS = {"danger", "swerve", "shooter", "projectile"}
+
+# С какого счёта начинают появляться особые типы блоков
+SWERVE_UNLOCK_SCORE = 50
+SHOOTER_UNLOCK_SCORE = 100
+TRAP_UNLOCK_SCORE = 30
 
 
 class FallingObject(Widget):
@@ -214,6 +295,13 @@ class FallingObject(Widget):
         self.size = style["size"]
         self.pos = (x, y)
         self.speed = speed
+        self.vx = 0  # горизонтальная скорость (для виляющих блоков)
+        self.swerved = False  # уже сменил траекторию?
+
+        if kind == "shooter":
+            self.shoot_cooldown = 1.7
+            self.shoot_timer = random.uniform(0.4, 1.1)
+
         with self.canvas:
             Color(*style["color"])
             if style["shape"] == "circle":
@@ -223,7 +311,16 @@ class FallingObject(Widget):
 
     def move(self, dt, speed_multiplier):
         self.y -= self.speed * speed_multiplier * dt
+        if self.vx:
+            self.x += self.vx * speed_multiplier * dt
         self.shape.pos = self.pos
+
+    def maybe_swerve(self, screen_height):
+        """Виляющий блок: падает прямо, потом резко уходит вправо-вниз."""
+        if self.kind == "swerve" and not self.swerved and self.y < screen_height * 0.62:
+            self.swerved = True
+            self.vx = random.uniform(260, 360)
+            self.speed *= 1.5
 
     def nudge_toward(self, target_x, target_y, dt, strength=260):
         dx = target_x - self.center_x
@@ -238,24 +335,84 @@ class FallingObject(Widget):
 
 
 # Веса выпадения типов объектов (чем больше — тем чаще)
-SPAWN_WEIGHTS = [
-    ("danger", 60),
-    ("coin", 22),
-    ("gold", 10),
+BASE_SPAWN_WEIGHTS = [
+    ("danger", 55),
+    ("coin", 20),
+    ("gold", 9),
     ("shield", 4),
     ("slow", 4),
 ]
 
 
-def pick_kind():
-    total = sum(w for _, w in SPAWN_WEIGHTS)
+def pick_kind(score):
+    weights = list(BASE_SPAWN_WEIGHTS)
+    if score >= SWERVE_UNLOCK_SCORE:
+        weights.append(("swerve", 9))
+    if score >= SHOOTER_UNLOCK_SCORE:
+        weights.append(("shooter", 6))
+
+    total = sum(w for _, w in weights)
     r = random.uniform(0, total)
     upto = 0
-    for kind, w in SPAWN_WEIGHTS:
+    for kind, w in weights:
         upto += w
         if r <= upto:
             return kind
     return "danger"
+
+
+class WallTrap(Widget):
+    """Ловушка, выскакивающая из боковой стены. Сначала недолго мигает
+    фиолетовая линия-предупреждение на стене, затем ловушка резко
+    выдвигается в игровое поле на короткое время."""
+
+    def __init__(self, side, y, screen_width, thickness=60, extend=95,
+                 warn_time=0.7, active_time=0.45, **kwargs):
+        super().__init__(**kwargs)
+        self.size_hint = (None, None)
+        self.size = (1, 1)
+        self.side = side
+        self.thickness = thickness
+        self.extend = extend
+        self.warn_time = warn_time
+        self.active_time = active_time
+        self.state = "warn"
+        self.timer = 0.0
+
+        x_wall = 0 if side == "left" else screen_width
+        body_x = x_wall if side == "left" else x_wall - extend
+        with self.canvas:
+            self.warn_color = Color(0.7, 0.3, 0.95, 0.9)
+            self.warn_line = Line(points=[x_wall, y, x_wall, y + thickness], width=5)
+            self.body_color = Color(0.75, 0.25, 0.85, 0)
+            self.body_pos = (body_x, y)
+            self.body_size = (extend, thickness)
+            self.body_rect = Rectangle(pos=self.body_pos, size=self.body_size)
+
+    def advance(self, dt):
+        self.timer += dt
+        if self.state == "warn":
+            # Мигание линии-предупреждения на стене
+            self.warn_color.a = 0.4 + 0.5 * abs(math.sin(self.timer * 10))
+            if self.timer >= self.warn_time:
+                self.state = "active"
+                self.timer = 0
+                self.warn_color.a = 0
+                self.body_color.a = 0.9
+        elif self.state == "active":
+            if self.timer >= self.active_time:
+                self.state = "done"
+                self.body_color.a = 0
+
+    def collides_with(self, player):
+        if self.state != "active":
+            return False
+        bx, by = self.body_pos
+        bw, bh = self.body_size
+        return not (
+            player.right < bx or player.x > bx + bw
+            or player.top < by or player.y > by + bh
+        )
 
 
 # ======================================================================
@@ -293,8 +450,8 @@ class GameScreen(Screen):
     def _start_game(self, dt):
         width = self.width or Window.width
 
-        skin_color = get_skin_color(self.save.get("selected_skin", "green"))
-        self.player = Player(skin_color, pos=(width / 2 - 40, 20))
+        skin = get_skin(self.save.get("selected_skin", "green"))
+        self.player = Player(skin, pos=(width / 2 - 40, 20))
         self.root_layout.add_widget(self.player)
 
         self.objects = []
@@ -309,8 +466,9 @@ class GameScreen(Screen):
         self.slow_timer = 0.0
         # Небольшая неуязвимость в начале, чтобы не было ложных столкновений
         self.invulnerable_timer = 1.5
-        if "slow_start" in self.save.get("owned_upgrades", []):
-            self.invulnerable_timer = 1.5  # уже учтено ниже мягким стартом скорости
+
+        self.traps = []
+        self.trap_timer = random.uniform(3.0, 5.0)
 
         self._dragging = False
         self.started = True
@@ -356,7 +514,7 @@ class GameScreen(Screen):
     def spawn_object(self):
         width = self.width or Window.width
         height = self.height or Window.height
-        kind = pick_kind()
+        kind = pick_kind(self.score)
         style = KIND_STYLE[kind]
         x = random.randint(0, max(0, int(width - style["size"][0])))
 
@@ -365,6 +523,25 @@ class GameScreen(Screen):
         obj = FallingObject(kind, x, height, speed)
         self.objects.append(obj)
         self.root_layout.add_widget(obj)
+
+    def spawn_projectile(self, shooter_obj):
+        """Стреляющий блок выпускает снаряд строго вниз."""
+        style = KIND_STYLE["projectile"]
+        x = shooter_obj.center_x - style["size"][0] / 2
+        y = shooter_obj.y
+        proj = FallingObject("projectile", x, y, speed=520)
+        self.objects.append(proj)
+        self.root_layout.add_widget(proj)
+        play_sound("shot")
+
+    def spawn_trap(self):
+        width = self.width or Window.width
+        height = self.height or Window.height
+        side = random.choice(["left", "right"])
+        y = random.uniform(height * 0.15, height * 0.65)
+        trap = WallTrap(side, y, width)
+        self.traps.append(trap)
+        self.root_layout.add_widget(trap)
 
     def _update_background(self):
         index = min(self.score // 15, len(BG_LEVELS) - 1)
@@ -386,21 +563,41 @@ class GameScreen(Screen):
         self.player.set_shield_visible(self.shield_timer > 0)
         self.player.update_graphics()
 
-        # --- Сложность растёт со временем ---
-        difficulty = min(self.elapsed / 40.0, 2.2)  # максимум в ~1.5 мин
+        # --- Сложность растёт и со временем, и с очками ---
+        time_difficulty = min(self.elapsed / 45.0, 1.6)
+        score_difficulty = min(self.score * 0.02, 1.8)
+        difficulty = time_difficulty + score_difficulty
         speed_multiplier = 1.0 + difficulty
         if self.slow_timer > 0:
             speed_multiplier *= 0.45
         if "slow_start" in self.save.get("owned_upgrades", []) and self.elapsed < 3:
             speed_multiplier *= 0.6
 
-        self.spawn_interval = max(0.45, 1.2 - difficulty * 0.3)
+        self.spawn_interval = max(0.4, 1.2 - difficulty * 0.25)
         self.spawn_accumulator += dt
         if self.spawn_accumulator >= self.spawn_interval:
             self.spawn_accumulator = 0
             self.spawn_object()
 
+        # --- Ловушки в стенах (с TRAP_UNLOCK_SCORE очков) ---
+        if self.score >= TRAP_UNLOCK_SCORE:
+            self.trap_timer -= dt
+            if self.trap_timer <= 0:
+                self.trap_timer = random.uniform(3.5, 6.0)
+                self.spawn_trap()
+
+        for trap in self.traps[:]:
+            trap.advance(dt)
+            if trap.state == "done":
+                self.traps.remove(trap)
+                self.root_layout.remove_widget(trap)
+                continue
+            if self.invulnerable_timer <= 0 and trap.collides_with(self.player):
+                self._on_death()
+                return
+
         width = self.width or Window.width
+        height = self.height or Window.height
 
         has_magnet = "magnet" in self.save.get("owned_upgrades", [])
 
@@ -413,15 +610,24 @@ class GameScreen(Screen):
                 if dist < 220:
                     obj.nudge_toward(self.player.center_x, self.player.center_y, dt)
 
+            if obj.kind == "swerve":
+                obj.maybe_swerve(height)
+
+            if obj.kind == "shooter":
+                obj.shoot_timer -= dt
+                if obj.shoot_timer <= 0:
+                    obj.shoot_timer = obj.shoot_cooldown
+                    self.spawn_projectile(obj)
+
             obj.move(dt, speed_multiplier)
 
-            if obj.top < 0:
+            if obj.top < 0 or obj.right < 0 or obj.x > width:
                 self.objects.remove(obj)
                 self.root_layout.remove_widget(obj)
                 # Очко за каждый успешно пройденный (не задевший игрока)
                 # опасный блок. Засчитывается ровно один раз — блок уже
                 # удалён из игры и больше не может быть пройден повторно.
-                if obj.kind == "danger":
+                if obj.kind in HAZARD_KINDS:
                     self.score += 1
                     self.score_label.text = f"Очки: {self.score}"
                 continue
@@ -435,10 +641,10 @@ class GameScreen(Screen):
         self.objects.remove(obj)
         self.root_layout.remove_widget(obj)
 
-        if obj.kind == "danger":
+        if obj.kind in HAZARD_KINDS:
             if self.shield_timer > 0 or self.invulnerable_timer > 0:
                 return  # щит поглотил удар
-            self.end_game()
+            self._on_death()
             return
 
         if obj.kind == "coin":
@@ -462,12 +668,72 @@ class GameScreen(Screen):
             play_sound("powerup")
 
     # ------------------------------------------------------------
-    def end_game(self):
+    def _on_death(self):
+        """Игрок столкнулся с опасностью. Даём шанс возродиться за монеты
+        вместо того, чтобы сразу завершать игру."""
         self.game_over = True
         Clock.unschedule(self.update)
         play_sound("hit")
         vibrate(0.15)
 
+        available = self.save.get("coins", 0) + self.run_coins
+        can_revive = available >= REVIVE_COST
+
+        overlay = BoxLayout(orientation="vertical", spacing=14,
+                             pos_hint={"center_x": 0.5, "center_y": 0.5},
+                             size_hint=(0.85, 0.55))
+        overlay.add_widget(Label(text="Вы разбились!", font_size=30))
+        overlay.add_widget(Label(
+            text=f"Очки: {self.score}\nМонет в забеге: {self.run_coins}",
+            font_size=20, halign="center",
+        ))
+
+        if can_revive:
+            revive_btn = Button(text=f"Возродиться (-{REVIVE_COST} монет)", size_hint=(1, 0.28))
+            revive_btn.bind(on_release=lambda *_: self._revive(overlay))
+            overlay.add_widget(revive_btn)
+        else:
+            overlay.add_widget(Label(
+                text=f"Не хватает монет для возрождения ({REVIVE_COST})",
+                font_size=15, size_hint=(1, 0.2),
+            ))
+
+        finish_btn = Button(text="Закончить игру", size_hint=(1, 0.28))
+        finish_btn.bind(on_release=lambda *_: self._finalize(overlay))
+        overlay.add_widget(finish_btn)
+
+        self.root_layout.add_widget(overlay)
+
+    def _revive(self, overlay):
+        cost = REVIVE_COST
+        if self.run_coins >= cost:
+            self.run_coins -= cost
+        else:
+            remaining = cost - self.run_coins
+            self.run_coins = 0
+            self.save["coins"] = max(0, self.save.get("coins", 0) - remaining)
+            write_save(self.save)
+        self.coins_label.text = f"Монеты: {self.run_coins}"
+        self.root_layout.remove_widget(overlay)
+
+        # Убираем все опасные объекты рядом и даём короткую неуязвимость
+        for obj in self.objects[:]:
+            if obj.kind in HAZARD_KINDS:
+                self.objects.remove(obj)
+                self.root_layout.remove_widget(obj)
+        for trap in self.traps[:]:
+            self.traps.remove(trap)
+            self.root_layout.remove_widget(trap)
+
+        self.invulnerable_timer = 1.5
+        self.game_over = False
+        Clock.schedule_interval(self.update, 1 / 60)
+
+    def _finalize(self, overlay):
+        self.root_layout.remove_widget(overlay)
+        self._show_results()
+
+    def _show_results(self):
         # Сохраняем результат
         self.save["coins"] = self.save.get("coins", 0) + self.run_coins
         scores = self.save.get("high_scores", [])
@@ -593,13 +859,37 @@ class ShopScreen(Screen):
         row = BoxLayout(size_hint_y=None, height=70, spacing=10)
 
         swatch = Widget(size_hint=(0.15, 1))
-        with swatch.canvas:
-            Color(*skin["color"])
-            rect = Rectangle(pos=swatch.pos, size=(50, 50))
+        if skin.get("shape") == "image":
+            thumb = KivyImage(source=asset_path(skin["image"]), size=(50, 50),
+                               allow_stretch=True, keep_ratio=False)
 
-        def sync_rect(instance, _):
-            rect.pos = (instance.x, instance.center_y - 25)
-        swatch.bind(pos=sync_rect, size=sync_rect)
+            def sync_thumb(instance, _):
+                thumb.pos = (instance.x, instance.center_y - 25)
+            swatch.bind(pos=sync_thumb, size=sync_thumb)
+            swatch.add_widget(thumb)
+        else:
+            shape = skin.get("shape", "rect")
+            with swatch.canvas:
+                Color(*skin["color"])
+                if shape == "circle":
+                    inst = Ellipse(pos=swatch.pos, size=(50, 50))
+                elif shape == "triangle":
+                    inst = Triangle(points=[0, 0, 25, 50, 50, 0])
+                elif shape == "diamond":
+                    inst = Quad(points=[25, 0, 50, 25, 25, 50, 0, 25])
+                else:
+                    inst = Rectangle(pos=swatch.pos, size=(50, 50))
+
+            def sync_rect(instance, _, inst=inst, shape=shape):
+                cx, cy = instance.x, instance.center_y - 25
+                if shape == "triangle":
+                    inst.points = [cx, cy, cx + 25, cy + 50, cx + 50, cy]
+                elif shape == "diamond":
+                    inst.points = [cx + 25, cy, cx + 50, cy + 25, cx + 25, cy + 50, cx, cy + 25]
+                else:
+                    inst.pos = (cx, cy)
+                    inst.size = (50, 50)
+            swatch.bind(pos=sync_rect, size=sync_rect)
 
         row.add_widget(swatch)
         row.add_widget(Label(text=skin["name"], font_size=18))
